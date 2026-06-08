@@ -2,7 +2,7 @@
 
 Detect hanging test leaks before they waste CI minutes.
 
-`test-leak` is a tiny JS/TS developer-experience CLI that runs your test command with a lightweight Node.js probe. When the command hangs, it prints the resources that are still alive: timers, intervals, open servers, and child processes.
+`test-leak` is a tiny JS/TS developer-experience CLI that runs your test command with a lightweight Node.js probe. When the command hangs, it prints the resources that are still alive: timers, intervals, open servers, and child processes launched through `child_process.spawn()`.
 
 ```bash
 npx test-leak -- npm test
@@ -29,7 +29,7 @@ This repository is in early MVP development. The first version tracks resources 
 - `setInterval`
 - `setImmediate`
 - `net.Server.listen()` / `server.close()`
-- `child_process.spawn()`
+- `child_process.spawn()` from CommonJS or ESM named imports
 
 Vitest and Jest setup adapters are included so leaks can fail at test-file teardown instead of only after the outer CLI timeout.
 
@@ -120,7 +120,7 @@ Adapter environment options:
 | `--min-age <duration>` | Ignore resources younger than this age. Default: `0ms`. |
 | `--json <file>` | Write the final leak snapshot JSON to a file. |
 | `--no-inject` | Do not inject the probe with `NODE_OPTIONS`. |
-| `--shell` / `--no-shell` | Control whether the command runs through a shell. |
+| `--shell` / `--no-shell` | Control whether the command runs through a shell. Windows defaults to `--shell` so `npm test` works. Use `--no-shell` when you need literal argument handling. |
 | `-q, --quiet` | Only print failures. |
 
 Durations support `ms`, `s`, and `m`, for example `500ms`, `10s`, and `1m`.
@@ -139,7 +139,10 @@ That import installs runtime probes inside the Node.js test process and periodic
 
 - It only sees Node.js processes that honor `NODE_OPTIONS`.
 - The current MVP tracks common userland leaks, not every native libuv handle.
+- It does not yet track `node:timers/promises`, `child_process.exec()`, `execFile()`, `fork()`, `worker_threads`, `fs.watch()`, `dgram` sockets, or arbitrary native-addon handles.
 - On Windows the CLI defaults to `--shell` so commands like `npm test` work; process-tree termination uses `taskkill`.
+- Shell mode is for package-script convenience, not an arbitrary shell-escaping security boundary. Prefer `--no-shell` for literal untrusted arguments.
+- The current MVP tracks `child_process.spawn()`; broader process and native-handle coverage is future work.
 - If a test runner starts isolated workers that strip `NODE_OPTIONS`, those workers need explicit setup in a future adapter.
 - Adapter cleanup is best-effort. It is meant to let the runner exit after reporting; do not rely on it as application cleanup.
 

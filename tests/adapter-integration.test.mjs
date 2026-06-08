@@ -12,6 +12,7 @@ const jestBin = path.join(root, "node_modules", "jest", "bin", "jest.js");
 const vitestAdapter = path.join(root, "dist", "vitest.js").replace(/\\/g, "/");
 const jestAdapter = path.join(root, "dist", "jest.cjs").replace(/\\/g, "/");
 const adapterModuleUrl = pathToFileURL(path.join(root, "dist", "adapter.js")).href;
+const jestAdapterRequirePath = path.join(root, "dist", "jest.cjs");
 
 function makeFixture(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `test-leak-${name}-`));
@@ -128,7 +129,10 @@ test("generic adapter failOnLeak=false logs and cleans leaked intervals", { time
   const script = `
 const { assertNoTestLeaks } = await import(${JSON.stringify(adapterModuleUrl)});
 const logs = [];
-console.error = (message) => logs.push(String(message));
+process.stderr.write = (message) => {
+  logs.push(String(message));
+  return true;
+};
 setInterval(() => {}, 1000);
 const snapshot = assertNoTestLeaks({ runner: "Direct", failOnLeak: false });
 if (snapshot.summary.total !== 1) {
@@ -176,8 +180,24 @@ test("Vitest adapter can clean leaked intervals without failing when fail mode i
 
   const result = await runVitest(dir, { TEST_LEAK_ADAPTER_FAIL: "false" });
   assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /test-leak: Vitest finished with leaked resources/);
   assert.match(result.output, /1 passed/);
   assert.doesNotMatch(result.output, /Test Files\s+1 failed/);
+});
+
+test("Jest CJS adapter exposes named helpers when loaded as a setup file", { timeout: 40_000 }, async () => {
+  const script = `
+global.afterAll = (callback) => {
+  global.__testLeakAfterAll = callback;
+};
+const adapter = require(${JSON.stringify(jestAdapterRequirePath)});
+if (typeof adapter.assertNoTestLeaks !== "function") process.exit(2);
+if (typeof adapter.installAfterAllLeakCheck !== "function") process.exit(3);
+if (typeof adapter.installJestLeakDetector !== "function") process.exit(4);
+`;
+
+  const result = await runNode(["-e", script], { cwd: root });
+  assert.equal(result.code, 0, result.output);
 });
 
 test("Jest adapter passes clean tests", { timeout: 40_000 }, async () => {

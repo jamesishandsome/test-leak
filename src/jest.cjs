@@ -2,6 +2,7 @@
 
 const net = require("node:net");
 const childProcess = require("node:child_process");
+const { syncBuiltinESMExports } = require("node:module");
 
 const INSTALL_KEY = Symbol.for("test-leak.jest-cjs.installed");
 const state = globalThis;
@@ -68,6 +69,7 @@ function installPatches() {
   if (state[INSTALL_KEY]) return;
   state[INSTALL_KEY] = true;
 
+  const timers = require("node:timers");
   const timeoutIds = new WeakMap();
   const intervalIds = new WeakMap();
   const immediateIds = new WeakMap();
@@ -136,6 +138,14 @@ function installPatches() {
     return originalClearImmediate(handle);
   };
 
+  timers.setTimeout = globalThis.setTimeout;
+  timers.clearTimeout = globalThis.clearTimeout;
+  timers.setInterval = globalThis.setInterval;
+  timers.clearInterval = globalThis.clearInterval;
+  timers.setImmediate = globalThis.setImmediate;
+  timers.clearImmediate = globalThis.clearImmediate;
+  syncBuiltinESMExports();
+
   const serverIds = new WeakMap();
   const originalListen = net.Server.prototype.listen;
   net.Server.prototype.listen = function patchedListen(...args) {
@@ -176,6 +186,8 @@ function installPatches() {
     child.once("close", () => untrack(resourceId));
     return child;
   };
+
+  syncBuiltinESMExports();
 }
 
 function snapshot(minAgeMs = 0) {
@@ -256,26 +268,47 @@ function cleanup(ids) {
   }
 }
 
-installPatches();
-
-if (typeof globalThis.afterAll !== "function") {
-  throw new Error("test-leak: Jest afterAll is not available. Add test-leak/jest to setupFilesAfterEnv.");
-}
-
-globalThis.afterAll(() => {
-  const minAgeMs = parseIntegerEnv("TEST_LEAK_ADAPTER_MIN_AGE_MS", 0);
-  const maxResources = parseIntegerEnv("TEST_LEAK_ADAPTER_MAX_RESOURCES", 20);
-  const shouldCleanup = parseBooleanEnv("TEST_LEAK_ADAPTER_CLEANUP", true);
-  const shouldFail = parseBooleanEnv("TEST_LEAK_ADAPTER_FAIL", true);
+function assertNoTestLeaks(options = {}) {
+  const minAgeMs = options.minAgeMs ?? parseIntegerEnv("TEST_LEAK_ADAPTER_MIN_AGE_MS", 0);
+  const maxResources = options.maxResources ?? parseIntegerEnv("TEST_LEAK_ADAPTER_MAX_RESOURCES", 20);
+  const shouldCleanup = options.cleanup ?? parseBooleanEnv("TEST_LEAK_ADAPTER_CLEANUP", true);
+  const shouldFail = options.failOnLeak ?? parseBooleanEnv("TEST_LEAK_ADAPTER_FAIL", true);
+  const runner = options.runner ?? "Jest";
   const leakSnapshot = snapshot(minAgeMs);
-  if (leakSnapshot.summary.total === 0) return;
+  if (leakSnapshot.summary.total === 0) return leakSnapshot;
 
   const message = [
-    "test-leak: Jest finished with leaked resources.",
+    `test-leak: ${runner} finished with leaked resources.`,
     formatSnapshot(leakSnapshot, maxResources),
   ].join("\n");
 
+  options.onLeak?.(leakSnapshot, message);
   if (shouldCleanup) cleanup(leakSnapshot.resources.map((resource) => resource.id));
   if (shouldFail) throw new Error(message);
-  console.error(message);
-});
+  process.stderr.write(`${message}\n`);
+  return leakSnapshot;
+}
+
+function installAfterAllLeakCheck(afterAllHook, options = {}) {
+  afterAllHook(() => {
+    assertNoTestLeaks(options);
+  });
+}
+
+function installJestLeakDetector(options = {}) {
+  if (typeof globalThis.afterAll !== "function") {
+    throw new Error("test-leak: Jest afterAll is not available. Add test-leak/jest to setupFilesAfterEnv.");
+  }
+
+  installAfterAllLeakCheck(globalThis.afterAll, { runner: "Jest", ...options });
+}
+
+installPatches();
+
+module.exports = {
+  assertNoTestLeaks,
+  installAfterAllLeakCheck,
+  installJestLeakDetector,
+};
+
+installJestLeakDetector();

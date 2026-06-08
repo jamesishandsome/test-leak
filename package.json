@@ -1,7 +1,7 @@
 {
   "name": "test-leak",
   "version": "0.1.0",
-  "description": "Detect hanging test leaks like open handles, timers, servers, and child processes.",
+  "description": "Detect hanging test leaks like timers, open servers, and spawned child processes.",
   "type": "module",
   "bin": {
     "test-leak": "./dist/cli.js"
@@ -80,9 +80,9 @@
     }
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "jest": "^30.4.2",
-    "typescript": "latest",
-    "vitest": "^4.1.8"
+    "@types/node": "25.9.2",
+    "jest": "30.4.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
   }
 }

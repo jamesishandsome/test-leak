@@ -1,4 +1,4 @@
-﻿import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import { trackResource, untrackResource, writeSnapshot } from "./tracker.js";
 
@@ -31,6 +31,7 @@ function parseIntegerEnv(name: string, fallback: number): number {
 }
 
 function installTimerPatches(): void {
+  const timers = require("node:timers") as Record<string, unknown>;
   const timeoutIds = new WeakMap<object, string>();
   const intervalIds = new WeakMap<object, string>();
   const immediateIds = new WeakMap<object, string>();
@@ -118,6 +119,14 @@ function installTimerPatches(): void {
     if (key) untrackResource(immediateIds.get(key));
     return originalClearImmediate(handle as never);
   }) as typeof globalThis.clearImmediate;
+
+  timers.setTimeout = globalThis.setTimeout;
+  timers.clearTimeout = globalThis.clearTimeout;
+  timers.setInterval = globalThis.setInterval;
+  timers.clearInterval = globalThis.clearInterval;
+  timers.setImmediate = globalThis.setImmediate;
+  timers.clearImmediate = globalThis.clearImmediate;
+  syncBuiltinESMExports();
 }
 
 function installServerPatch(): void {
@@ -184,6 +193,8 @@ function installChildProcessPatch(): void {
     child.once("close", () => untrackResource(resourceId));
     return child;
   };
+
+  syncBuiltinESMExports();
 }
 
 function startReporter(): void {

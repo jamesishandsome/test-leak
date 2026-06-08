@@ -47,6 +47,10 @@ function resolveOptions(options: TestLeakAdapterOptions): Required<Pick<TestLeak
   };
 }
 
+function writeDiagnostic(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 export function assertNoTestLeaks(options: TestLeakAdapterOptions = {}): LeakSnapshot {
   const resolved = resolveOptions(options);
   const snapshot = getSnapshot(resolved.minAgeMs);
@@ -61,7 +65,7 @@ export function assertNoTestLeaks(options: TestLeakAdapterOptions = {}): LeakSna
   if (resolved.cleanup) cleanupResources(snapshot.resources.map((resource) => resource.id));
   if (resolved.failOnLeak) throw new Error(message);
 
-  console.error(message);
+  writeDiagnostic(message);
   return snapshot;
 }
 

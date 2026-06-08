@@ -26,6 +26,7 @@ interface ParsedCli {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
+const TIMEOUT_KILL_GRACE_MS = 1_500;
 
 function usage(): string {
   return `test-leak ${VERSION}
@@ -144,15 +145,6 @@ function parseArgs(argv: string[]): ParsedCli | "help" | "version" {
   return { options, command };
 }
 
-function quoteForShell(value: string): string {
-  if (/^[\w./:=@+-]+$/.test(value)) return value;
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
-}
-
-function buildShellCommand(command: string[]): string {
-  return command.map(quoteForShell).join(" ");
-}
-
 function registerImportOption(): string {
   const currentFile = fileURLToPath(import.meta.url);
   const registerFile = path.join(path.dirname(currentFile), "register.js");
@@ -178,14 +170,50 @@ function writeUserJson(jsonFile: string | undefined, snapshot: LeakSnapshot | nu
   fs.writeFileSync(jsonFile, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
 }
 
-function killProcessTree(pid: number): void {
+function quoteForPosixShell(value: string): string {
+  if (/^[\w./:=@%+-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function quoteForWindowsShell(value: string): string {
+  if (/^[\w./:=@+\\-]+$/.test(value)) return value;
+
+  let quoted = '"';
+  let backslashes = 0;
+  for (const char of value) {
+    if (char === "\\") {
+      backslashes += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted += "\\".repeat(backslashes * 2 + 1);
+      quoted += '"';
+      backslashes = 0;
+      continue;
+    }
+    quoted += "\\".repeat(backslashes);
+    backslashes = 0;
+    quoted += char;
+  }
+  quoted += "\\".repeat(backslashes * 2);
+  quoted += '"';
+
+  return quoted.replace(/%/g, '"^%"');
+}
+
+function buildShellCommand(command: string[]): string {
+  const quote = process.platform === "win32" ? quoteForWindowsShell : quoteForPosixShell;
+  return command.map(quote).join(" ");
+}
+
+function killProcessTree(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
   if (process.platform === "win32") {
     const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
     const taskkill = path.join(systemRoot, "System32", "taskkill.exe");
     const result = spawnSync(taskkill, ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
     if (result.error) {
       try {
-        process.kill(pid, "SIGTERM");
+        process.kill(pid, signal);
       } catch {
         // Already gone or inaccessible.
       }
@@ -194,10 +222,10 @@ function killProcessTree(pid: number): void {
   }
 
   try {
-    process.kill(-pid, "SIGTERM");
+    process.kill(-pid, signal);
   } catch {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(pid, signal);
     } catch {
       // Already gone.
     }
@@ -212,6 +240,7 @@ function runCommand(command: string[], options: CliOptions, reportFile: string):
           env,
           shell: true,
           stdio: "inherit",
+          detached: process.platform !== "win32",
           windowsHide: true,
         })
       : spawn(command[0]!, command.slice(1), {
@@ -223,26 +252,50 @@ function runCommand(command: string[], options: CliOptions, reportFile: string):
         });
 
     let timedOut = false;
-    const timer =
-      options.timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            if (!options.quiet) {
-              console.error(`\ntest-leak: command exceeded ${options.timeoutMs}ms; collecting leak snapshot...`);
-            }
-            if (child.pid) killProcessTree(child.pid);
-          }, options.timeoutMs)
-        : undefined;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let graceTimer: NodeJS.Timeout | undefined;
+    const settle = (exitCode: number) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      resolve(exitCode);
+    };
+    const reportTimedOut = () => {
+      const snapshot = readSnapshot(reportFile);
+      writeUserJson(options.jsonFile, snapshot);
+      console.error("\ntest-leak: Possible test leak detected. The test command did not exit cleanly.");
+      if (snapshot) console.error(formatSnapshot(snapshot));
+      else console.error("No probe snapshot was written. The command may not have been a Node.js process, or NODE_OPTIONS was ignored.");
+      return 124;
+    };
+    if (options.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        if (!options.quiet) {
+          console.error(`\ntest-leak: command exceeded ${options.timeoutMs}ms; collecting leak snapshot...`);
+        }
+        if (child.pid) killProcessTree(child.pid, "SIGTERM");
+        graceTimer = setTimeout(() => {
+          if (settled) return;
+          if (child.pid) killProcessTree(child.pid, "SIGKILL");
+          child.unref();
+          settle(reportTimedOut());
+        }, TIMEOUT_KILL_GRACE_MS);
+        graceTimer.unref();
+      }, options.timeoutMs);
+    }
     timer?.unref();
 
     child.on("error", (error) => {
-      if (timer) clearTimeout(timer);
+      if (settled) return;
       console.error(`test-leak: failed to start command: ${error.message}`);
-      resolve(127);
+      settle(127);
     });
 
     child.on("close", (code, signal) => {
-      if (timer) clearTimeout(timer);
+      if (settled) return;
       const snapshot = readSnapshot(reportFile);
       writeUserJson(options.jsonFile, snapshot);
 
@@ -250,25 +303,25 @@ function runCommand(command: string[], options: CliOptions, reportFile: string):
         console.error("\ntest-leak: Possible test leak detected. The test command did not exit cleanly.");
         if (snapshot) console.error(formatSnapshot(snapshot));
         else console.error("No probe snapshot was written. The command may not have been a Node.js process, or NODE_OPTIONS was ignored.");
-        resolve(124);
+        settle(124);
         return;
       }
 
       const commandExitCode = code ?? (signal ? 1 : 0);
       if (commandExitCode !== 0) {
-        resolve(commandExitCode);
+        settle(commandExitCode);
         return;
       }
 
       if (snapshot && snapshot.summary.total > 0) {
         console.error("\ntest-leak: Leaked resources remained when the command exited.");
         console.error(formatSnapshot(snapshot));
-        resolve(1);
+        settle(1);
         return;
       }
 
       if (!options.quiet) console.error("test-leak: no leaks detected.");
-      resolve(0);
+      settle(0);
     });
   });
 }

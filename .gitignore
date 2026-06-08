@@ -2,5 +2,6 @@
 dist/
 coverage/
 .test-leak/
+.omx/
 *.log
 .DS_Store
