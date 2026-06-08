@@ -18,6 +18,20 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForSnapshot(reportFile, predicate = () => true, timeoutMs = 5_000) {
+  const startedAt = Date.now();
+  let lastSnapshot = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (fs.existsSync(reportFile)) {
+      lastSnapshot = JSON.parse(fs.readFileSync(reportFile, "utf8"));
+      if (predicate(lastSnapshot)) return lastSnapshot;
+    }
+    await delay(50);
+  }
+
+  throw new Error(`Timed out waiting for snapshot ${reportFile}. Last snapshot: ${JSON.stringify(lastSnapshot)}`);
+}
+
 function killProcessTree(pid) {
   if (!pid) return;
 
@@ -113,11 +127,12 @@ test("register writes a snapshot containing leaked intervals", async () => {
   });
 
   const closed = waitForClose(child);
-  await delay(450);
-  child.kill("SIGTERM");
+  const snapshot = await waitForSnapshot(reportFile, (candidate) =>
+    candidate.resources.some((resource) => resource.kind === "interval"),
+  );
+  killProcessTree(child.pid);
   await closed;
 
-  const snapshot = JSON.parse(fs.readFileSync(reportFile, "utf8"));
   assert.equal(snapshot.tool, "test-leak");
   assert.ok(snapshot.resources.some((resource) => resource.kind === "interval"));
 });
@@ -144,11 +159,12 @@ setInterval(() => {}, 1000);
   });
 
   const closed = waitForClose(child);
-  await delay(450);
-  child.kill("SIGTERM");
+  const snapshot = await waitForSnapshot(reportFile, (candidate) =>
+    candidate.resources.some((resource) => resource.kind === "interval"),
+  );
+  killProcessTree(child.pid);
   await closed;
 
-  const snapshot = JSON.parse(fs.readFileSync(reportFile, "utf8"));
   assert.ok(
     snapshot.resources.some((resource) => resource.kind === "interval"),
     JSON.stringify(snapshot, null, 2),
@@ -179,11 +195,12 @@ setInterval(() => {}, 1000);
   });
 
   const closed = waitForClose(child);
-  await delay(450);
+  const snapshot = await waitForSnapshot(reportFile, (candidate) =>
+    candidate.resources.some((resource) => resource.kind === "child-process"),
+  );
   killProcessTree(child.pid);
   await closed;
 
-  const snapshot = JSON.parse(fs.readFileSync(reportFile, "utf8"));
   assert.ok(
     snapshot.resources.some((resource) => resource.kind === "child-process"),
     JSON.stringify(snapshot, null, 2),

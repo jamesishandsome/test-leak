@@ -176,18 +176,20 @@ function installPatches() {
     }
   };
 
-  const originalSpawn = childProcess.spawn;
-  childProcess.spawn = function patchedSpawn(...args) {
-    const child = originalSpawn.apply(this, args);
-    const command = typeof args[0] === "string" ? args[0] : "unknown";
-    const spawnArgs = Array.isArray(args[1]) ? args[1].join(" ") : "";
-    const resourceId = track("child-process", { command, args: spawnArgs, pid: child.pid }, () => true, () => child.kill?.());
-    child.once("exit", () => untrack(resourceId));
-    child.once("close", () => untrack(resourceId));
-    return child;
-  };
-
-  syncBuiltinESMExports();
+  const childProcessPrototype = childProcess.ChildProcess?.prototype;
+  const originalSpawn = childProcessPrototype?.spawn;
+  if (childProcessPrototype && typeof originalSpawn === "function") {
+    childProcessPrototype.spawn = function patchedChildProcessSpawn(options) {
+      const result = originalSpawn.call(this, options);
+      const args = Array.isArray(options?.args) ? options.args : [];
+      const command = typeof options?.file === "string" ? options.file : typeof args[0] === "string" ? args[0] : "unknown";
+      const spawnArgs = args.slice(1).map(String).join(" ");
+      const resourceId = track("child-process", { command, args: spawnArgs, pid: this.pid }, () => true, () => this.kill?.());
+      this.once("exit", () => untrack(resourceId));
+      this.once("close", () => untrack(resourceId));
+      return result;
+    };
+  }
 }
 
 function snapshot(minAgeMs = 0) {

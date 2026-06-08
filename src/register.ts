@@ -172,29 +172,35 @@ function installServerPatch(): void {
 }
 
 function installChildProcessPatch(): void {
-  const childProcess = require("node:child_process") as Record<string, unknown>;
-  const originalSpawn = childProcess.spawn as
-    | ((...args: unknown[]) => { once: Function; pid?: number; kill?: () => unknown })
-    | undefined;
-  if (typeof originalSpawn !== "function") return;
+  const childProcess = require("node:child_process") as {
+    ChildProcess?: {
+      prototype?: {
+        spawn?: (this: ChildProcessLike, options: ChildProcessSpawnOptions) => unknown;
+      };
+    };
+  };
+  type ChildProcessLike = { once: (event: "exit" | "close", listener: () => void) => unknown; pid?: number; kill?: () => unknown };
+  type ChildProcessSpawnOptions = { file?: unknown; args?: unknown };
+  const proto = childProcess.ChildProcess?.prototype;
+  const originalSpawn = proto?.spawn;
+  if (!proto || typeof originalSpawn !== "function") return;
 
-  childProcess.spawn = function patchedSpawn(this: unknown, ...args: unknown[]) {
-    const child = originalSpawn.apply(this, args);
-    const command = typeof args[0] === "string" ? args[0] : "unknown";
-    const spawnArgs = Array.isArray(args[1]) ? args[1].join(" ") : "";
+  proto.spawn = function patchedChildProcessSpawn(this: ChildProcessLike, options: ChildProcessSpawnOptions) {
+    const result = originalSpawn.call(this, options);
+    const args = Array.isArray(options.args) ? options.args : [];
+    const command = typeof options.file === "string" ? options.file : typeof args[0] === "string" ? args[0] : "unknown";
+    const spawnArgs = args.slice(1).map(String).join(" ");
     const resourceId = trackResource(
       "child-process",
-      { command, args: spawnArgs, pid: child.pid },
+      { command, args: spawnArgs, pid: this.pid },
       () => true,
       undefined,
-      () => child.kill?.(),
+      () => this.kill?.(),
     );
-    child.once("exit", () => untrackResource(resourceId));
-    child.once("close", () => untrackResource(resourceId));
-    return child;
+    this.once("exit", () => untrackResource(resourceId));
+    this.once("close", () => untrackResource(resourceId));
+    return result;
   };
-
-  syncBuiltinESMExports();
 }
 
 function startReporter(): void {
