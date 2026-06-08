@@ -31,7 +31,7 @@ This repository is in early MVP development. The first version tracks resources 
 - `net.Server.listen()` / `server.close()`
 - `child_process.spawn()`
 
-Future versions will add framework-specific integrations for Vitest, Jest, and `node:test` teardown hooks.
+Vitest and Jest setup adapters are included so leaks can fail at test-file teardown instead of only after the outer CLI timeout.
 
 ## Usage
 
@@ -54,6 +54,62 @@ test-leak --timeout 5s -- node --test
 # Write machine-readable output
 test-leak --json .test-leak/report.json -- npm test
 ```
+
+## Vitest adapter
+
+Add `test-leak/vitest` to `setupFiles`:
+
+```ts
+// vitest.config.ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    setupFiles: ["test-leak/vitest"],
+  },
+});
+```
+
+Then run Vitest normally, or wrap it with the CLI for an outer hang timeout:
+
+```bash
+vitest run
+test-leak --timeout 15s -- vitest run
+```
+
+## Jest adapter
+
+Add `test-leak/jest` to `setupFilesAfterEnv`:
+
+```js
+// jest.config.cjs
+module.exports = {
+  testEnvironment: "node",
+  setupFilesAfterEnv: ["test-leak/jest"],
+};
+```
+
+Then run Jest normally, or wrap it with the CLI for an outer hang timeout:
+
+```bash
+jest --runInBand
+test-leak --timeout 15s -- jest --runInBand
+```
+
+The adapters install an `afterAll` check. If a test file leaves tracked resources alive, the adapter:
+
+1. prints a `test-leak` resource report,
+2. clears the leaked timers/servers/processes best-effort so the runner can exit,
+3. fails the test file.
+
+Adapter environment options:
+
+| Env var | Description |
+| --- | --- |
+| `TEST_LEAK_ADAPTER_MIN_AGE_MS` | Ignore resources younger than this age. |
+| `TEST_LEAK_ADAPTER_CLEANUP` | Set to `false` to report without cleanup. Default: `true`. |
+| `TEST_LEAK_ADAPTER_FAIL` | Set to `false` to log instead of throwing. Default: `true`. |
+| `TEST_LEAK_ADAPTER_MAX_RESOURCES` | Max resources shown in adapter output. Default: `20`. |
 
 ## Options
 
@@ -85,6 +141,7 @@ That import installs runtime probes inside the Node.js test process and periodic
 - The current MVP tracks common userland leaks, not every native libuv handle.
 - On Windows the CLI defaults to `--shell` so commands like `npm test` work; process-tree termination uses `taskkill`.
 - If a test runner starts isolated workers that strip `NODE_OPTIONS`, those workers need explicit setup in a future adapter.
+- Adapter cleanup is best-effort. It is meant to let the runner exit after reporting; do not rely on it as application cleanup.
 
 ## Development
 

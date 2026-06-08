@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "test-leak",
   "version": "0.1.0",
   "description": "Detect hanging test leaks like open handles, timers, servers, and child processes.",
@@ -14,6 +14,20 @@
     "./register": {
       "types": "./dist/register.d.ts",
       "default": "./dist/register.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "default": "./dist/adapter.js"
+    },
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "default": "./dist/vitest.js"
+    },
+    "./jest": {
+      "types": "./dist/jest.d.ts",
+      "import": "./dist/jest.js",
+      "require": "./dist/jest.cjs",
+      "default": "./dist/jest.js"
     }
   },
   "files": [
@@ -22,7 +36,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "node --test tests/*.test.mjs",
     "verify": "npm run build && npm test",
@@ -53,8 +67,22 @@
   "homepage": "https://github.com/jamesishandsome/test-leak#readme",
   "author": "James <jamesishandsome@users.noreply.github.com>",
   "license": "MIT",
+  "peerDependencies": {
+    "jest": ">=28",
+    "vitest": ">=1"
+  },
+  "peerDependenciesMeta": {
+    "jest": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "latest",
-    "typescript": "latest"
+    "jest": "^30.4.2",
+    "typescript": "latest",
+    "vitest": "^4.1.8"
   }
 }

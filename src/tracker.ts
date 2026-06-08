@@ -10,6 +10,7 @@ interface InternalResource {
   stack?: string;
   detail?: Record<string, unknown>;
   getRef?: () => boolean | undefined;
+  cleanup?: () => void;
 }
 
 const startedAt = new Date();
@@ -31,6 +32,7 @@ export function trackResource(
   detail?: Record<string, unknown>,
   getRef?: () => boolean | undefined,
   stack = captureStack(3),
+  cleanup?: () => void,
 ): string {
   const id = makeId(kind);
   const createdAtMs = Date.now();
@@ -42,6 +44,7 @@ export function trackResource(
     stack,
     detail,
     getRef,
+    cleanup,
   });
   return id;
 }
@@ -104,5 +107,22 @@ export function readSnapshot(filePath: string): LeakSnapshot | null {
     return JSON.parse(raw) as LeakSnapshot;
   } catch {
     return null;
+  }
+}
+
+export function cleanupResources(ids?: Iterable<string>): void {
+  const targetIds = ids ? [...ids] : [...resources.keys()];
+
+  for (const id of targetIds) {
+    const resource = resources.get(id);
+    if (!resource) continue;
+
+    try {
+      resource.cleanup?.();
+    } catch {
+      // Cleanup is best-effort: the diagnostic should still be reported.
+    } finally {
+      resources.delete(id);
+    }
   }
 }

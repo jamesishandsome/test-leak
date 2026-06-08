@@ -20,6 +20,8 @@ Build a small npm CLI that detects why JS/TS test commands hang, with actionable
 - The CLI injects a Node.js probe with `NODE_OPTIONS=--import`.
 - The probe records timers, intervals, immediates, open `net.Server` instances, and spawned child processes.
 - If the command exceeds `--timeout`, the CLI exits `124` and prints a readable leak report.
+- `test-leak/vitest` can be used from Vitest `setupFiles` and fails a file-level `afterAll` when leaks remain.
+- `test-leak/jest` can be used from Jest `setupFilesAfterEnv` and fails a file-level `afterAll` when leaks remain.
 - Clean commands exit `0`.
 - The CLI can write JSON output for CI artifacts.
 - Local verification passes with `npm run verify`.
@@ -27,11 +29,11 @@ Build a small npm CLI that detects why JS/TS test commands hang, with actionable
 ## V1 roadmap
 
 1. Stabilize the probe and CLI contract.
-2. Add Vitest setup adapter with `afterAll` leak assertions.
-3. Add Jest setup adapter with `afterAll` leak assertions.
-4. Add `node:test` recipe or adapter for global teardown.
-5. Add GitHub Actions example and Markdown summary output.
-6. Add diff/ratchet mode: fail only on leaks introduced by changed tests.
+2. Add `node:test` recipe or adapter for global teardown.
+3. Add GitHub Actions example and Markdown summary output.
+4. Add diff/ratchet mode: fail only on leaks introduced by changed tests.
+5. Add ignore APIs for intentionally long-lived resources.
+6. Add worker inheritance checks for runners that spawn isolated Node processes.
 
 ## Risks and mitigations
 

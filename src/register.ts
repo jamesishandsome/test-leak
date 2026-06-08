@@ -53,6 +53,8 @@ function installTimerPatches(): void {
       "timeout",
       { delayMs: delay ?? 0 },
       () => hasRef(handle),
+      undefined,
+      () => originalClearTimeout(handle as never),
     );
     const key = asObject(handle);
     if (key) timeoutIds.set(key, resourceId);
@@ -71,6 +73,8 @@ function installTimerPatches(): void {
       "interval",
       { delayMs: delay ?? 0 },
       () => hasRef(handle),
+      undefined,
+      () => originalClearInterval(handle as never),
     );
     const key = asObject(handle);
     if (key) intervalIds.set(key, resourceId);
@@ -97,7 +101,13 @@ function installTimerPatches(): void {
         : handler;
 
     const handle = originalSetImmediate(wrappedHandler as never, ...(args as never[]));
-    resourceId = trackResource("immediate", undefined, () => hasRef(handle));
+    resourceId = trackResource(
+      "immediate",
+      undefined,
+      () => hasRef(handle),
+      undefined,
+      () => originalClearImmediate(handle as never),
+    );
     const key = asObject(handle);
     if (key) immediateIds.set(key, resourceId);
     return handle;
@@ -129,7 +139,15 @@ function installServerPatch(): void {
         })
         .join(" ");
 
-      resourceId = trackResource("server", { listen: listenArgs }, () => true);
+      resourceId = trackResource(
+        "server",
+        { listen: listenArgs },
+        () => true,
+        undefined,
+        () => {
+          if (this.listening) this.close();
+        },
+      );
       serverIds.set(this, resourceId);
       this.once("close", () => untrackResource(resourceId));
     }
@@ -146,7 +164,9 @@ function installServerPatch(): void {
 
 function installChildProcessPatch(): void {
   const childProcess = require("node:child_process") as Record<string, unknown>;
-  const originalSpawn = childProcess.spawn as ((...args: unknown[]) => { once: Function; pid?: number }) | undefined;
+  const originalSpawn = childProcess.spawn as
+    | ((...args: unknown[]) => { once: Function; pid?: number; kill?: () => unknown })
+    | undefined;
   if (typeof originalSpawn !== "function") return;
 
   childProcess.spawn = function patchedSpawn(this: unknown, ...args: unknown[]) {
@@ -157,6 +177,8 @@ function installChildProcessPatch(): void {
       "child-process",
       { command, args: spawnArgs, pid: child.pid },
       () => true,
+      undefined,
+      () => child.kill?.(),
     );
     child.once("exit", () => untrackResource(resourceId));
     child.once("close", () => untrackResource(resourceId));
