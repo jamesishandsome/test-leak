@@ -1,0 +1,6 @@
+﻿node_modules/
+dist/
+coverage/
+.test-leak/
+*.log
+.DS_Store
